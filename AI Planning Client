@@ -1,0 +1,333 @@
+/**
+ * @NApiVersion 2.1
+ * @NScriptType ClientScript
+ * @NModuleScope SameAccount
+ */
+define(['N/https', 'N/url', 'N/currentRecord'],
+function(https, url, currentRecord) {
+    
+    var RESTLET_URL = null; // Will be set dynamically
+    
+    function pageInit(context) {
+        console.log('AI Supply Planning Workbench - Client Script Loaded');
+        
+        // Get RESTlet URL from hidden field (set by Suitelet)
+        var rec = context.currentRecord;
+        try {
+            RESTLET_URL = rec.getValue({fieldId: 'custpage_restlet_url'});
+        } catch(e) {
+            console.error('RESTlet URL not found');
+        }
+        
+        // Initialize any interactive components
+        initializeAIChat();
+    }
+    
+    // -------------------- AI Chat Functions --------------------
+    
+    function initializeAIChat() {
+        // Add event listener to AI chat input (if present)
+        var chatInput = document.getElementById('aiChatInput');
+        if (chatInput) {
+            chatInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    sendAIMessage();
+                }
+            });
+        }
+    }
+    
+    function sendAIMessage() {
+        var input = document.getElementById('aiChatInput');
+        var messagesDiv = document.getElementById('aiChatMessages');
+        
+        if (!input || !messagesDiv) {
+            alert('Chat interface not found');
+            return;
+        }
+        
+        var userMessage = input.value.trim();
+        if (!userMessage) return;
+        
+        // Add user message to chat
+        addChatMessage(messagesDiv, userMessage, 'user');
+        input.value = '';
+        
+        // Show typing indicator
+        var typingId = addTypingIndicator(messagesDiv);
+        
+        // Call RESTlet to get AI response
+        if (RESTLET_URL) {
+            callRESTlet('POST', {
+                action: 'ai_query',
+                query: userMessage
+            }, function(response) {
+                removeTypingIndicator(typingId);
+                addChatMessage(messagesDiv, response.answer, 'ai');
+            }, function(error) {
+                removeTypingIndicator(typingId);
+                addChatMessage(messagesDiv, 'Error: ' + error, 'error');
+            });
+        } else {
+            // Fallback: static responses
+            removeTypingIndicator(typingId);
+            var aiResponse = getStaticAIResponse(userMessage);
+            addChatMessage(messagesDiv, aiResponse, 'ai');
+        }
+    }
+    
+    function addChatMessage(container, text, type) {
+        var msgDiv = document.createElement('div');
+        msgDiv.className = 'chat-message ' + type;
+        
+        var avatar = document.createElement('div');
+        avatar.className = 'chat-avatar';
+        avatar.textContent = type === 'user' ? 'You' : 'AI';
+        
+        var bubble = document.createElement('div');
+        bubble.className = 'chat-bubble';
+        bubble.innerHTML = text;
+        
+        msgDiv.appendChild(avatar);
+        msgDiv.appendChild(bubble);
+        container.appendChild(msgDiv);
+        container.scrollTop = container.scrollHeight;
+    }
+    
+    function addTypingIndicator(container) {
+        var typingDiv = document.createElement('div');
+        typingDiv.className = 'chat-typing';
+        typingDiv.id = 'typing-' + Date.now();
+        typingDiv.innerHTML = '<div class="chat-avatar">AI</div><div class="chat-bubble">Analyzing data...</div>';
+        container.appendChild(typingDiv);
+        container.scrollTop = container.scrollHeight;
+        return typingDiv.id;
+    }
+    
+    function removeTypingIndicator(id) {
+        var typing = document.getElementById(id);
+        if (typing) typing.remove();
+    }
+    
+    function getStaticAIResponse(query) {
+        var q = query.toLowerCase();
+        
+        if (q.includes('stockout') || q.includes('risk')) {
+            return 'Based on 3-month rolling average analysis, I found <strong>12 items at stockout risk</strong>:<br><br>' +
+                   '🔴 PR100-G: 8 days (recommend PO for 250 units)<br>' +
+                   '🟡 NS-II1357E: 11 days<br>' +
+                   '🟡 NS-LN3571E: 13 days (spike detected)';
+        }
+        
+        if (q.includes('forecast') || q.includes('demand')) {
+            return 'Linear regression forecast for next month:<br><br>' +
+                   'PR100-G: 24 units (92% confidence)<br>' +
+                   'NS-II1357E: 12 units (90% confidence)<br>' +
+                   'NS-LN3571E: 7 units (87% confidence - anomaly)';
+        }
+        
+        if (q.includes('vendor')) {
+            return 'Top vendors by performance:<br><br>' +
+                   'Predict Factors Alpha: 94% on-time, 456 POs<br>' +
+                   'Predict Factors Beta: 92% on-time, 427 POs<br>' +
+                   'Core4Solutions: 88% on-time, 132 POs';
+        }
+        
+        return 'I can help with:<br>' +
+               '• Stockout risk analysis<br>' +
+               '• Demand forecasting<br>' +
+               '• Vendor performance<br>' +
+               '• Purchase order recommendations<br>' +
+               '• Safety stock optimization';
+    }
+    
+    // -------------------- Demand History Functions --------------------
+    
+    function showMonthDetail(itemId) {
+        if (!RESTLET_URL) {
+            alert('Month detail: ' + itemId);
+            return;
+        }
+        
+        callRESTlet('POST', {
+            action: 'get_item_detail',
+            itemId: itemId
+        }, function(response) {
+            displayMonthDetail(itemId, response.monthData);
+        });
+    }
+    
+    function displayMonthDetail(itemId, monthData) {
+        var detailDiv = document.getElementById('monthDetail');
+        var itemSpan = document.getElementById('detailItem');
+        var tbody = document.getElementById('detailTableBody');
+        
+        if (!detailDiv || !itemSpan || !tbody) return;
+        
+        itemSpan.textContent = itemId;
+        tbody.innerHTML = '';
+        
+        monthData.forEach(function(row) {
+            var tr = document.createElement('tr');
+            tr.innerHTML = '<td>' + row.month + '</td>' +
+                          '<td class="numeric">' + row.qty + '</td>' +
+                          '<td class="numeric">$' + row.value.toFixed(2) + '</td>' +
+                          '<td class="numeric ' + (row.change > 0 ? 'trend-positive' : 'trend-negative') + '">' +
+                          (row.change > 0 ? '+' : '') + row.change + '%</td>';
+            tbody.appendChild(tr);
+        });
+        
+        detailDiv.style.display = 'block';
+    }
+    
+    // -------------------- Inventory Pegging Functions --------------------
+    
+    function togglePegging(soId) {
+        var detailRow = document.getElementById('detail-' + soId);
+        if (detailRow) {
+            detailRow.classList.toggle('expanded');
+        }
+    }
+    
+    // -------------------- Visualization Functions --------------------
+    
+    function updateChart() {
+        var selector = document.getElementById('itemSelector');
+        if (!selector) {
+            alert('Item selector not found');
+            return;
+        }
+        
+        var selectedItems = Array.from(selector.selectedOptions).map(function(opt) {
+            return opt.value;
+        });
+        
+        if (selectedItems.length === 0) {
+            alert('Please select at least one item');
+            return;
+        }
+        
+        if (!RESTLET_URL) {
+            alert('Chart would update with: ' + selectedItems.join(', '));
+            return;
+        }
+        
+        callRESTlet('POST', {
+            action: 'get_chart_data',
+            items: selectedItems
+        }, function(response) {
+            renderChart(response.chartData);
+        });
+    }
+    
+    function renderChart(chartData) {
+        var canvas = document.getElementById('demandChart');
+        if (!canvas || typeof Chart === 'undefined') return;
+        
+        // Destroy existing chart
+        if (window.currentChart) {
+            window.currentChart.destroy();
+        }
+        
+        var ctx = canvas.getContext('2d');
+        window.currentChart = new Chart(ctx, {
+            type: 'line',
+            data: chartData,
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: {display: true, position: 'top'},
+                    title: {display: true, text: 'Demand Trends with Forecast'}
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: {display: true, text: 'Quantity'}
+                    }
+                }
+            }
+        });
+    }
+    
+    // -------------------- Replenishment Functions --------------------
+    
+    function aiSuggestPO() {
+        if (!RESTLET_URL) {
+            alert('AI PO Suggestion:\n\nVendor: Predict Factors Alpha\nItem: PR100-G\nQuantity: 250 units\nEstimated Cost: $17,500');
+            return;
+        }
+        
+        callRESTlet('POST', {
+            action: 'ai_suggest_po'
+        }, function(response) {
+            displayPOSuggestion(response);
+        });
+    }
+    
+    function displayPOSuggestion(suggestion) {
+        // Populate PO form fields
+        var rec = currentRecord.get();
+        rec.setValue({fieldId: 'custpage_po_vendor', value: suggestion.vendorId});
+        rec.setValue({fieldId: 'custpage_po_location', value: suggestion.locationId});
+        rec.setValue({fieldId: 'custpage_po_items', value: JSON.stringify(suggestion.items)});
+        
+        alert('AI has populated the PO form with recommended values. Review and click "Create Purchase Order".');
+    }
+    
+    function aiOptimizeSafetyStock() {
+        var rec = currentRecord.get();
+        var itemId = rec.getValue({fieldId: 'custpage_ss_item'});
+        
+        if (!itemId) {
+            alert('Please select an item first');
+            return;
+        }
+        
+        if (!RESTLET_URL) {
+            alert('AI Recommendation:\n\nCurrent: 30 units\nRecommended: 35 units\nReason: 15% increase based on variance analysis');
+            return;
+        }
+        
+        callRESTlet('POST', {
+            action: 'ai_optimize_safety_stock',
+            itemId: itemId
+        }, function(response) {
+            rec.setValue({fieldId: 'custpage_ss_qty', value: response.recommendedQty});
+            alert('AI Recommendation:\n\nRecommended: ' + response.recommendedQty + ' units\nReason: ' + response.reason);
+        });
+    }
+    
+    // -------------------- RESTlet Communication --------------------
+    
+    function callRESTlet(method, data, successCallback, errorCallback) {
+        try {
+            var response = https.request({
+                method: method,
+                url: RESTLET_URL,
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(data)
+            });
+            
+            if (response.code === 200) {
+                var result = JSON.parse(response.body);
+                if (successCallback) successCallback(result);
+            } else {
+                if (errorCallback) errorCallback('HTTP ' + response.code);
+            }
+        } catch(e) {
+            if (errorCallback) errorCallback(e.message);
+        }
+    }
+    
+    // -------------------- Export Functions --------------------
+    
+    return {
+        pageInit: pageInit,
+        sendAIMessage: sendAIMessage,
+        showMonthDetail: showMonthDetail,
+        togglePegging: togglePegging,
+        updateChart: updateChart,
+        aiSuggestPO: aiSuggestPO,
+        aiOptimizeSafetyStock: aiOptimizeSafetyStock
+    };
+});
